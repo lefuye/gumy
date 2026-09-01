@@ -1,0 +1,6 @@
+.env
+node_modules/
+gumy.db
+enka-cache/
+image-cache/
+*.log

@@ -1,0 +1,27 @@
+{
+  "name": "gumy-bot",
+  "version": "1.0.0",
+  "description": "Gumy - a Discord chatbot for a mixed Linux/Genshin community: chat, web search, and Genshin build analysis",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "register-commands": "node slashes.js",
+    "prewarm-images": "node prewarm-images.js"
+  },
+  "keywords": [
+    "discord-bot",
+    "genshin-impact",
+    "openai"
+  ],
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.6.1",
+    "enka-network-api": "^5.1.2",
+    "genshin-db": "^5.2.13",
+    "openai": "^6.48.0",
+    "punycode": "^2.3.1",
+    "sharp": "^0.35.3"
+  }
+}

@@ -1,0 +1,196 @@
+════════════════════════════════════════════════════════════════════
+  GUMY - Discord chatbot (chat + web search + Genshin build analysis)
+  Setup instructions - follow these top to bottom, in order.
+════════════════════════════════════════════════════════════════════
+
+WHAT YOU NEED BEFORE STARTING
+  - A computer with internet (Windows, Mac, or Linux).
+  - A Discord account and a server where you have "Manage Server"
+    permission (your own server is perfect).
+  - An OpenAI account with billing set up. The bot calls OpenAI's API
+    and that costs a small amount of money per message. No OpenAI
+    account + key = bot will not run. No way around this.
+
+
+STEP 1 - INSTALL NODE.JS
+  1. Go to https://nodejs.org and download the "LTS" version.
+  2. Install it with all the default options (next, next, finish).
+  3. Check it worked:
+       Windows: press Start, type "cmd", open Command Prompt, type:
+         node --version
+       Mac/Linux: open a Terminal, type the same.
+     You want to see "v18" or higher. If you see an error like
+     "node is not recognized", restart your computer and try again.
+
+
+STEP 2 - UNZIP THIS FOLDER AND OPEN A TERMINAL IN IT
+  1. Unzip the file you downloaded somewhere easy, e.g.
+       Windows: C:\gumy
+       Mac/Linux: /home/yourname/gumy
+  2. Open a terminal INSIDE that folder:
+       Windows: open the folder in File Explorer, click the address
+         bar at the top, type "cmd" and press Enter.
+       Mac: right-click the folder -> New Terminal at Folder.
+       Linux: cd into it.
+
+
+STEP 3 - INSTALL THE BOT'S DEPENDENCIES
+  In the terminal, type exactly:
+       npm install
+  Wait until it finishes. It will take a few minutes. If you see red
+  "WARN" lines, that's fine - only "ERR" lines are a problem.
+
+
+STEP 4 - CREATE THE DISCORD BOT (one-time, ~10 minutes)
+  1. Go to https://discord.com/developers/applications and log in.
+  2. Click "New Application" (top right). Name it "Gumy" (or
+     anything). Accept.
+  3. Left sidebar -> "Bot":
+       - Click "Reset Token" -> Copy. KEEP THIS PRIVATE. This is your
+         TOKEN for step 5.
+       - Scroll down to "Privileged Gateway Intents" and turn ON all
+         three:
+           [x] Presence Intent
+           [x] Server Members Intent
+           [x] Message Content Intent
+         (Message Content is the critical one - the bot cannot read
+         messages without it.) Click Save Changes if a button shows.
+  4. Left sidebar -> "General Information":
+       - Copy "Application ID". This is your BOT_ID for step 5.
+  5. Invite the bot to your server. In your browser, go to:
+       https://discord.com/oauth2/authorize?scope=bot%20applications.commands
+     It will ask for the Application ID you copied in 4 - paste it,
+     pick your server, and authorize. (Or click "OAuth2" in the
+     sidebar -> URL Generator -> tick "bot" + "applications.commands"
+     -> tick Administrator -> open the generated URL.)
+  6. In Discord itself: User Settings (gear, bottom left) -> Advanced
+     -> turn ON "Developer Mode". You need this for copying IDs.
+
+
+STEP 5 - CREATE YOUR .env FILE
+  1. In the unzipped folder, find the file ".env.example".
+     Make a COPY of it in the same folder and rename the copy to:
+         .env          (exactly that, no .txt on the end)
+     Windows tip: if you can't rename it, in File Explorer enable
+     View -> File name extensions, then rename.
+  2. Open .env in Notepad (Windows: right-click -> Open with ->
+     Notepad) and fill it in:
+       TOKEN=        paste the Discord bot token from step 4.3
+       OPENAI_KEY=   paste your OpenAI key (step 0 - create one at
+                     https://platform.openai.com/api-keys -> "Create
+                     new secret key", copy it immediately)
+       BOT_ID=       the Application ID from step 4.4
+       GUILD_ID=     right-click your SERVER's name/icon in Discord ->
+                     Copy Server ID
+       HOME_CHANNEL_IDS=   OPTIONAL - leave empty for now
+       QUOTA_WHITELIST_USERS= / QUOTA_WHITELIST_ROLES=  OPTIONAL -
+                     leave empty for now
+  3. Save the file. Do NOT send this file to anyone - it holds your
+     keys.
+
+
+STEP 6 - REGISTER THE SLASH COMMANDS
+  In the terminal (still inside the folder):
+       node slashes.js
+  Should print nothing scary and exit. If it says
+  "Missing BOT_ID / GUILD_ID / TOKEN", your .env isn't saved right -
+  go back to step 5. You only need to run this once (and again
+  whenever you add/change a command in the code).
+
+
+STEP 7 - RUN THE BOT
+       node index.js
+  You'll see "OpenAI API key is loaded" and then "The bot is online!".
+  Leave this terminal window open - closing it turns the bot off.
+  Test it:
+       - In your server, @mention the bot: "hey gumy what is linux"
+       - /search  <something>       (direct web search)
+       - /link uid:<your Genshin UID>   then
+         /analyze   (needs your Genshin Character Showcase set in-game)
+
+  To make the bot answer EVERY message in one specific channel
+  without being pinged: right-click that channel -> Copy Channel ID,
+  put it in .env as HOME_CHANNEL_IDS=thatnumber, restart the bot.
+
+  OPTIONAL but recommended: run
+       node prewarm-images.js
+  once before the first /analyze - it pre-downloads all character
+  portrait thumbnails (~120 characters, ~1 MB total) so /analyze is
+  instant and doesn't depend on image CDNs being up.
+
+
+WHAT EACH COMMAND DOES
+  - chat messages / @mentions : Gumy talks back, searches the web or
+    does Genshin build research when the question calls for it
+  - /search  <query>          : force a live web search
+  - /link    uid:<UID>        : remember your Genshin UID
+  - /analyze [uid|user]       : full build analysis of the linked
+    account's showcased character(s) (stats + live meta + akasha.cv
+    leaderboard percentile + portrait image)
+  - /quota                    : check your remaining daily usage
+  - /skibidi                  : exactly what it sounds like
+
+
+DAILY USAGE LIMITS (QUOTAS)
+  Every user gets a daily pool of chat/search/analyze uses (resets at
+  midnight UTC) so the OpenAI bill stays sane. You can adjust the
+  numbers in quota.js (the LIMITS object). Whitelisted users/roles in
+  .env skip all limits.
+
+
+IF SOMETHING IS BROKEN (troubleshooting)
+  - "OpenAI API key is missing"          -> .env has no OPENAI_KEY, or
+    the file is named wrong (must be exactly ".env", not ".env.txt").
+  - "Used disallowed intents" on startup -> step 4.3, the three
+    Privileged Gateway Intents are not all ON.
+  - "Missing BOT_ID / GUILD_ID / TOKEN"  -> .env not saved / wrong
+    folder / values not pasted.
+  - "Unknown interaction" when using a slash command -> run
+    node slashes.js again, then give Discord up to a minute and retry.
+  - Bot online but silent -> is it @mentioned? Is the channel in
+    HOME_CHANNEL_IDS? Is your OpenAI account out of credit? Check the
+    terminal - every action is logged there.
+  - /analyze says it can't find a UID -> the account's in-game
+    Character Showcase has never been opened. Open it once in-game,
+    then retry.
+  - Nothing here helps -> open documentation.md in this folder. It is the
+    full developer documentation: every file's job, how the pipeline
+    works, and the known sharp edges of each external service (Enka,
+    Akasha, image CDNs). If you're asking an AI assistant for help,
+    paste documentation.md into the chat too - it's written for exactly that.
+
+
+WHAT'S IN THIS FOLDER
+  index.js               main program: chat pipeline, quotas, history
+  slashes.js             registers the slash commands with Discord
+  analyze-command.js     /analyze and /link (build analysis)
+  search-command.js      /search
+  search-helpers.js      web search engine + prompt rules
+  quota.js               daily usage limits
+  enka.js                Enka Network (reads public Genshin showcase data)
+  akasha.js              akasha.cv leaderboard rankings
+  genshin-data.js        local Genshin database (genshin-db)
+  image-cache.js         local character portrait cache
+  gumy-persona.js        Gumy's personality - edit this to change how
+                         the bot talks (one shared string, used
+                         everywhere)
+  prewarm-images.js      pre-downloads all character portraits
+  debug-enka.js /        maintainer debug tools
+  debug-akasha.js
+  test-search.js         quick standalone search test
+  documentation.md       developer documentation (see above)
+  LICENSE.txt            AGPL v3 license + third-party service notices
+  .env.example           template for your .env file (step 5)
+
+  First run creates: gumy.db (SQLite, all user data/history) and
+  enka-cache/ + image-cache/ (downloaded game data and portraits).
+  Deleting gumy.db wipes all memory/history - it starts fresh.
+
+
+SECURITY NOTES - READ ONCE
+  - Your .env, your bot token, and your OpenAI key are secrets. If
+    either leaks, anyone can use them: reset the Discord token in the
+    Developer Portal, revoke the OpenAI key at platform.openai.com.
+  - The bot only reads messages in channels where it can see them and
+    stores them in its local gumy.db. Run it on a machine/server you
+    control.
