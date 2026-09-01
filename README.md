@@ -1,3 +1,5 @@
+## MADE FOR THY LEFYE CENTRAL. PROBABLY PRONE TO BUGS (though shouldnt). JOIN: https://discord.gg/hFUnpTV7HT 
+
 ## What this is
 
 "Gumy"; a Discord bot for a mixed Linux/Genshin community. Plain CommonJS Node.js, no build step, no linter, no test suite. Runs a single long-lived process (`node index.js`).
