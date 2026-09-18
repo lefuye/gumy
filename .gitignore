@@ -1,6 +1,18 @@
+# Secrets - never commit
 .env
-node_modules/
+
+# Runtime data (contains private user profiles + chat history)
 gumy.db
-enka-cache/
+*.db
+
+# Caches (regenerable - prewarm-images.js / enka auto-cache)
 image-cache/
-*.log
+enka-cache/
+node_modules/
+
+# Local build copies / scratch files
+gumy-release/
+gumy-release - Copy/
+gumy-bot.zip
+Error.txt
+need_to_fix.png

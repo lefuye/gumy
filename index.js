@@ -16,6 +16,12 @@ const QUOTA_WHITELIST_USERS = (process.env.QUOTA_WHITELIST_USERS || '').split(',
 const QUOTA_WHITELIST_ROLES = (process.env.QUOTA_WHITELIST_ROLES || '').split(',').map(s => s.trim()).filter(Boolean);
 if (QUOTA_WHITELIST_USERS.length > 0) console.log(`[quota] ${QUOTA_WHITELIST_USERS.length} user(s) whitelisted from quotas.`);
 if (QUOTA_WHITELIST_ROLES.length > 0) console.log(`[quota] ${QUOTA_WHITELIST_ROLES.length} role(s) whitelisted from quotas.`);
+
+// Owner ID for /boost (the owner-only boosted-reply command). Comma-separated
+// list is accepted, but it's meant to be a single ID - yours:
+//   OWNER_USER_ID=766030777116262441
+// Without it set, /boost tells whoever runs it that it isn't configured.
+const OWNER_USER_IDS = (process.env.OWNER_USER_ID || '').split(',').map(s => s.trim()).filter(Boolean);
 const { handleSearchCommand } = require('./search-command.js');
 const { GUMY_PERSONA } = require('./gumy-persona.js');
 const { buildResearcherSystemPrompt, todayDateString, isGenshinRelated, isLeakQuestion, refineSearchQueries, runMultiSearch, refineSearchQuery, getWebResearch, appendBannerLinksIfNeeded, formatSources } = require('./search-helpers.js');
@@ -676,7 +682,8 @@ client.on('messageCreate', async (message) => {
 
         if (!content || content.trim() === '') {
             console.error("Model returned empty content — likely all tokens used for reasoning.");
-            message.reply({ content: `<@${userId}> I burned through my whole response budget on internal reasoning and had nothing left to actually say - genuine bug, not me ignoring you. Try rephrasing shorter, or just ask again.${log.block()}`, allowedMentions: { repliedUser: true } });
+            const boostHint = OWNER_USER_IDS.includes(userId) ? '\n-# (Tip: /boost <query> raises the per-message token cap - this is exactly what it exists for.)' : '';
+            message.reply({ content: `<@${userId}> I burned through my whole response budget on internal reasoning and had nothing left to actually say - genuine bug, not me ignoring you. Try rephrasing shorter, or just ask again.${boostHint}${log.block()}`, allowedMentions: { repliedUser: true } });
             return;
         }
 
@@ -846,6 +853,91 @@ client.on("interactionCreate", async (interaction) => {
                 ].join('\n'),
                 ephemeral: true
             });
+        } else if (interaction.commandName === 'boost') {
+            // Owner-only boosted reply: runs the given query through Gumy with
+            // a much higher completion cap than normal chat (16000 vs 2000),
+            // for long-form asks like essays that don't fit the standard
+            // budget (reasoning alone was observed to eat the whole 2000).
+            // No Discord-native "owner only" permission exists, so enforcement
+            // is right here - anyone else gets an ephemeral no-op.
+            if (OWNER_USER_IDS.length === 0) {
+                interaction.reply({ content: `Boost isn't configured - set OWNER_USER_ID in .env and restart the bot.`, ephemeral: true });
+                return;
+            }
+            if (!OWNER_USER_IDS.includes(interaction.user.id)) {
+                interaction.reply({ content: `<@${interaction.user.id}> that one's not for you.`, ephemeral: true });
+                return;
+            }
+
+            const query = interaction.options.getString('query', true);
+            const boostedUserId = interaction.user.id;
+            const boostedUsername = interaction.user.username;
+
+            await interaction.deferReply();
+            try {
+                // Same grounding the chat pipeline uses: persona, profile,
+                // long-term history. Deliberately no classification, no web
+                // search, no quota - this is a direct, owner-only path.
+                const boostedUser = getUser(boostedUserId, boostedUsername);
+                const boostedProfileSummary = Object.keys(boostedUser.profile).length > 0
+                    ? `\nWhat you know about this user:\n${JSON.stringify(boostedUser.profile, null, 2)}`
+                    : '';
+                const boostedHistory = boostedUser.history.slice(-10).map(h => ({ role: h.role, content: h.content }));
+
+                const conversation = [
+                    {
+                        role: 'system',
+                        content: `
+        ${GUMY_PERSONA}
+
+        Addressing people:
+        - you know who's currently talking to you: it's ${boostedUsername} - work @${boostedUsername} naturally into every single reply (it'll resolve to a real mention automatically), even short ones. Not just when it "matters" - always, every message, no exceptions.
+        ${boostedProfileSummary}
+        `
+                    },
+                    ...boostedHistory,
+                    { role: 'user', name: boostedUsername, content: query }
+                ];
+
+                console.log(`[boost] ${boostedUsername} - generating boosted reply (${query.length} chars, 16000-token cap)...`);
+                const response = await openai.chat.completions.create({
+                    model: 'gpt-5.6-luna',
+                    messages: conversation,
+                    max_completion_tokens: 16000
+                });
+                console.log(`[boost] finish_reason: ${response.choices?.[0]?.finish_reason ?? 'unknown'}, tokens: ${response.usage?.total_tokens ?? '?'} (${response.usage?.completion_tokens ?? '?'} completion)`);
+
+                let content = response.choices?.[0]?.message?.content;
+                if (!content || content.trim() === '') {
+                    await interaction.editReply(`<@${boostedUserId}> the model burned its whole 16000-token budget on internal reasoning and had nothing left to say. That's the bug again, just bigger - try again.`);
+                    return;
+                }
+
+                content = resolveOutgoingMentions(content, interaction.guild);
+
+                // Same hard mention guarantee as the chat pipeline.
+                const boostedMentionTag = `<@${boostedUserId}>`;
+                if (!content.includes(boostedMentionTag)) {
+                    content = `${boostedMentionTag} ${content}`;
+                }
+
+                content += `\n\n-# boosted reply - ${query.length} char query, ${response.usage?.completion_tokens ?? '?'} completion tokens`;
+
+                const parts = splitMessage(content);
+                await interaction.editReply(parts[0]);
+                for (let i = 1; i < parts.length; i++) {
+                    await interaction.followUp(parts[i]);
+                }
+
+                rememberConversation(boostedUserId, boostedUsername, query, content);
+                console.log(`[boost] Reply sent to ${boostedUsername} - ${content.length} chars${parts.length > 1 ? ` across ${parts.length} messages` : ''}; conversation saved.`);
+            } catch (err) {
+                console.error('/boost failed:', err);
+                const msg = `The boosted reply hit a real backend error (${err.message || 'unknown error'}) - not Gumy being dumb, an actual failure. Try again in a moment.`;
+                interaction.replied || interaction.deferred
+                    ? interaction.editReply(msg).catch(() => {})
+                    : interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+            }
         }
     }
 });

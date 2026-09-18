@@ -65,6 +65,18 @@ await rest.put(Routes.applicationGuildCommands(botID, serverID), {
         {
             name: 'quota',
             description: 'Check your remaining daily usage for /analyze, /search, and chat messages'
+        },
+        {
+            name: 'boost',
+            description: 'lefye sometime need token bypass',
+            options: [
+                {
+                    name: 'query',
+                    description: 'What should Gumy write? (e.g. a verity)',
+                    type: 3, // STRING
+                    required: true
+                }
+            ]
         }
     ]
 })
