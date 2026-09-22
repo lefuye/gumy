@@ -3,6 +3,7 @@ const { fetchEnkaProfile } = require('./enka.js');
 const { GUMY_PERSONA } = require('./gumy-persona.js');
 const { getWebResearch, todayDateString } = require('./search-helpers.js');
 const { getArtifactSetBonuses } = require('./genshin-data.js');
+const { isSignatureWeapon } = require('./signature-weapons.js');
 const { getAkashaCalculationsForUser, summarizeAkashaCharacter, refreshAkashaUser } = require('./akasha.js');
 const { getCachedImageDataUrl, getCachedImageBuffer } = require('./image-cache.js');
 
@@ -165,6 +166,89 @@ function buildUserContextBlock(getUser, discordUserId, discordUsername) {
     }
 }
 
+// ─── Investment level (constellations / signature weapon) ──────────────────
+
+// Resolves how invested this character is, from the actual Enka profile data
+// (never guessed). Signature detection is centralized in signature-weapons.js;
+// this is where it turns into a review-standards tier for the prompt. Every
+// field degrades to null independently so partial profile data never crashes.
+function resolveInvestment(character) {
+    const weaponName = character.weapon?.name && character.weapon.name !== 'Unknown Weapon'
+        ? character.weapon.name
+        : null;
+    const refinementRaw = character.weapon?.refinement;
+    const refinement = Number.isInteger(refinementRaw) && refinementRaw >= 1 && refinementRaw <= 5
+        ? refinementRaw
+        : null;
+    const constellation = Number.isInteger(character.constellation)
+        ? Math.max(0, Math.min(6, character.constellation))
+        : null;
+    const isSignature = isSignatureWeapon(character.name, weaponName);
+
+    // Review-standards tier: the ladder the tone instructions below key off.
+    // C6 + signature = the harshest bar; C0 with no signature weapon = judged
+    // normally. Refinement only pushes a signature weapon up a tier at R3+.
+    let tier;
+    if (constellation === 6 && isSignature) tier = 'c6-signature';
+    else if (constellation === 6) tier = 'c6';
+    else if ((constellation ?? 0) >= 3 || (isSignature && (refinement ?? 1) >= 3)) tier = 'invested';
+    else if ((constellation ?? 0) >= 1 || isSignature) tier = 'elevated';
+    else tier = 'baseline';
+
+    return { constellation, weaponName, refinement, isSignature, tier };
+}
+
+// The compact "Bennett -- C2R3 -- Weapon XYZ -- 6/7/8" line, built from the
+// structured Enka data (talentLevels is NA/Skill/Burst in that exact order,
+// mapped by skill class in enka.js). Missing data shows as '?' rather than
+// being invented, and the whole line is skipped when there's nothing beyond
+// the character name.
+function formatTalentLevels(talentLevels) {
+    const t = talentLevels || {};
+    return ['normalAttack', 'elementalSkill', 'elementalBurst']
+        .map(k => (t[k] == null ? '?' : String(t[k])))
+        .join('/');
+}
+
+function buildInvestmentSummaryLine(character) {
+    const inv = character.investment;
+    if (!inv) return null;
+    const parts = [character.name];
+    const cr = `${inv.constellation != null ? `C${inv.constellation}` : ''}${inv.refinement != null ? `R${inv.refinement}` : ''}`;
+    if (cr) parts.push(cr);
+    if (inv.weaponName) parts.push(inv.weaponName);
+    const talents = formatTalentLevels(character.talentLevels);
+    if (talents !== '?/?/?') parts.push(talents);
+    return parts.length > 1 ? parts.join(' -- ') : null;
+}
+
+// Tone instructions scaling the review bar with investment. Per-tier text
+// only sets the STANDARDS - the criticism itself still has to come from the
+// actual stats, and the shared rule paragraph below keeps that honest.
+const INVESTMENT_TIER_TONE = {
+    baseline: 'No elevated expectations here - review the build on its own merits, fair and normal. Constellations and premium weapons aren\'t things everyone has, and a C0 with a F2P weapon shouldn\'t be judged as if it were whaled.',
+    elevated: 'Slightly raised expectations: a constellation or the signature weapon is deliberate investment, so it\'s fair to expect the basics done right (leveled talents, a set that fits the kit) - but one constellation doesn\'t make someone a whale. Stay proportionate.',
+    invested: 'Clearly raised expectations: multiple constellations and/or a highly-refined signature weapon is real, deliberate investment. It\'s fair to expect strong artifact rolls, sensible ER, and a set that actually fits - and to be noticeably more pointed when the stats don\'t keep up with the pulls that went in.',
+    c6: 'High expectations: C6 is the full commitment to this character, so there\'s very little excuse left for a mediocre build. Hold the artifacts to a high standard and be candid about anything underbuilt - the constellation budget clearly existed, so it\'s fair to ask where the artifact budget went.',
+    'c6-signature': 'Harshest standards: C6 AND the signature weapon is the maximum-investment statement a player can make about a character. A build that\'s merely OK on a kit this invested is a real letdown - call out the gap between what they spent and what they brought, hard, in the dry Gumy way. The one thing you still can\'t do is invent problems: if the build is genuinely excellent, hype it no matter how whaled it is.',
+};
+
+function buildInvestmentToneText(character) {
+    const inv = character.investment;
+    if (!inv) return '';
+
+    const facts = [];
+    facts.push(inv.constellation != null ? `constellation C${inv.constellation}` : 'constellation level unknown');
+    if (inv.weaponName) {
+        facts.push(`weapon ${inv.weaponName}${inv.refinement != null ? ` at refinement R${inv.refinement}` : ''} (${inv.isSignature ? 'this IS their signature weapon' : 'not their signature weapon'})`);
+    } else {
+        facts.push('no weapon data available');
+    }
+
+    return `Investment context for this character: ${facts.join(', ')}. Review standard: ${INVESTMENT_TIER_TONE[inv.tier] || INVESTMENT_TIER_TONE.baseline}
+The investment level sets your BAR, not a numeric penalty: the more someone has invested in a character, the less excuse the build has to be mediocre, so raise your expectations accordingly - a C6 with the signature weapon and mediocre artifacts deserves a much harder roast than a C0 with a reasonable F2P weapon and the same artifacts. But the criticism must still be grounded in the actual stats in front of you: never ding a genuinely good build just because the character is C6, and never invent weaknesses that aren't there. Express the (un)met expectations in your own words each time - no canned template sentence.`;
+}
+
 function buildAnalysisPrompt(character, playerInfo, researchText, setBonusText, userContext, akashaSummary) {
     return `${GUMY_PERSONA}
 
@@ -173,6 +257,8 @@ You're now acting as an experienced Genshin Impact theorycrafter, in the voice a
 Write a natural, conversational reply - like you're actually talking, not filling out a stat sheet. No JSON, no markdown headers, no bullet-point-only answers. Short paragraphs are fine. It's okay to have opinions, but be honest about uncertainty: if something depends on playstyle, rotation, or team comp you don't know, say so directly ("depends on your rotation, but...") instead of stating it as flat fact. The person reading this may push back or ask follow-ups, so don't oversell confidence you don't have.
 
 Tone: this is artifact RNG, not a report card - commentate it the way a streamer reacts to a build reveal, not like you're grading an exam. Bad rolls are bad luck, not a mistake the player made - "RNG really said no" energy, not "this is wrong." Good rolls get genuine hype. Don't be a pushover about actually weak pieces (a badly-rolled 4pc offset by nothing is still worth calling out), but land it with humor/sympathy rather than clinical criticism, and always give the overall vibe some room to be positive even on a rough build - there's usually SOMETHING going right. Keep the rating itself generous relative to how brutal you're being in the text: a build with real problems can still land a 6-7/10 if the bones are right, since most players will never get perfect rolls and that shouldn't read as failing.
+
+${buildInvestmentToneText(character)}
 
 Cover, in your own words and order:
 - your overall read on the build and what it's good for
@@ -302,6 +388,13 @@ function buildImageAttachment(character, buffer) {
 // or a viewer later replies to it with a follow-up doubt/question.
 function buildAnalysisText(character, analysisText, sources, setBonusText, setBonusLocalSource, akashaSummary) {
     let text = `**${character.name} — Build Analysis**\n`;
+    // Compact investment line ("Bennett -- C2R3 -- Weapon XYZ -- 6/7/8") -
+    // always visible even if the AI's prose glosses over it, same reasoning
+    // as the Akasha line below.
+    const summaryLine = buildInvestmentSummaryLine(character);
+    if (summaryLine) {
+        text += `\`${summaryLine}\`\n`;
+    }
     if (akashaSummary) {
         // Shown as its own visible line (not buried in the AI's prose) so the
         // percentile is always stated even if the model glosses over it.
@@ -350,6 +443,13 @@ function buildCharacterSelectMenu(characters) {
 async function runAnalysis(character, playerInfo, openai, userContext, akashaCalcs) {
     const log = createLogger();
     log(`Starting analysis for ${character.name}...`);
+    // Investment profile (constellation count, signature-weapon detection,
+    // review-standards tier) - computed once here from the Enka data, then
+    // read by the prompt's tone block, the structured character JSON, and the
+    // visible summary line. Mutates the local character object from this
+    // fetch; never throws even on partial data.
+    character.investment = resolveInvestment(character);
+    log(`Investment: C${character.investment.constellation ?? '?'}${character.investment.isSignature ? ` + signature weapon (${character.investment.weaponName}, R${character.investment.refinement ?? '?'})` : ''} -> review tier '${character.investment.tier}'.`);
     const visualUrl = character.imageUrl;
 
     // Match by Enka's numeric avatarId. null here is normal, not an error:
@@ -534,4 +634,4 @@ async function handleAnalyzeCommand(interaction, { db, openai, getUser, saveHist
     log(`Sent result for ${character.name}. Done.`);
 }
 
-module.exports = { setupLinkTable, handleLinkCommand, handleAnalyzeCommand, getLinkedUid, buildAnalysisPrompt, buildAnalysisText };
+module.exports = { setupLinkTable, handleLinkCommand, handleAnalyzeCommand, getLinkedUid, resolveInvestment, buildInvestmentSummaryLine, buildAnalysisPrompt, buildAnalysisText };

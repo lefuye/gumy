@@ -10,7 +10,7 @@
 // run `node debug-enka.js <uid>` (included alongside this file) to dump the
 // raw character object and patch the accessors here.
 
-const { EnkaClient } = require('enka-network-api');
+const { EnkaClient, NormalAttack, ElementalSkill, ElementalBurst } = require('enka-network-api');
 
 const enka = new EnkaClient({
     userAgent: 'Gumy-Discord-Bot/1.0',
@@ -111,9 +111,21 @@ function summarizeCharacter(char) {
     const data = char.characterData;
 
     const talents = {};
+    // Structured NA/Skill/Burst levels, classified by the library's own skill
+    // classes (NormalAttack / ElementalSkill / ElementalBurst) rather than by
+    // matching display-name strings - that's the same discrimination the
+    // library itself uses internally, so it stays correct per character.
+    // `.value` is base + extra (e.g. constellation boosts), i.e. the level the
+    // game actually shows.
+    const talentLevels = { normalAttack: null, elementalSkill: null, elementalBurst: null };
     try {
-        for (const skill of char.skillLevels || []) {
-            talents[skill.skill.name.get('en')] = skill.level;
+        for (const entry of char.skillLevels || []) {
+            const name = entry.skill?.name?.get?.('en');
+            const level = entry.level?.value ?? entry.level?.base ?? entry.level;
+            if (name != null && level != null) talents[name] = level;
+            if (entry.skill instanceof NormalAttack) talentLevels.normalAttack = level;
+            else if (entry.skill instanceof ElementalSkill) talentLevels.elementalSkill = level;
+            else if (entry.skill instanceof ElementalBurst) talentLevels.elementalBurst = level;
         }
     } catch { /* best-effort, skip if shape differs */ }
 
@@ -151,10 +163,16 @@ function summarizeCharacter(char) {
         };
     });
 
+    // refinementRank is the 1-5 refinement already; `char.weapon.refinement`
+    // is a WeaponRefinement OBJECT whose `.level` holds the same number, so
+    // normalize to a plain integer (and null when absent) here.
+    const refinementRaw = char.weapon?.refinementRank ?? char.weapon?.refinement?.level;
+    const refinement = Number.isFinite(Number(refinementRaw)) ? Number(refinementRaw) : null;
+
     const weapon = char.weapon ? {
         name: char.weapon.weaponData?.name?.get?.('en') ?? 'Unknown Weapon',
         level: char.weapon.level,
-        refinement: char.weapon.refinementRank ?? char.weapon.refinement,
+        refinement,
         stats: (char.weapon.weaponStats || []).map(formatStat).filter(Boolean),
     } : null;
 
@@ -177,9 +195,14 @@ function summarizeCharacter(char) {
         name: data?.name?.get?.('en') ?? `Character ${char.characterId}`,
         element: extractElement(),
         level: char.level,
-        constellation: char.unlockedConstellations ?? char.constellation ?? 0,
+        // unlockedConstellations is an ARRAY of Constellation objects - the
+        // count is the constellation level (C0-C6), not the array itself.
+        constellation: Array.isArray(char.unlockedConstellations)
+            ? char.unlockedConstellations.length
+            : (Number.isInteger(char.constellation) ? char.constellation : 0),
         friendship: char.friendship,
         talents,
+        talentLevels,
         stats,
         derived,
         weapon,
